@@ -1,5 +1,5 @@
 import sys
-from PySide6.QtCore import Qt, QTimer, QPoint, QEasingCurve, Property, QEvent
+from PySide6.QtCore import Qt, QTimer, QPoint, QEvent
 from PySide6.QtGui import QFont, QCursor, QGuiApplication, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -9,25 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QVBoxLayout,
     QLineEdit,
-    QGraphicsOpacityEffect,
 )
-
-class FadeWidget(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._opacity_effect = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(self._opacity_effect)
-        self._opacity_effect.setOpacity(0.0)
-        self._opacity = 0.0
-
-    def getOpacity(self):
-        return self._opacity
-
-    def setOpacity(self, value):
-        self._opacity = value
-        self._opacity_effect.setOpacity(value)
-
-    opacity = Property(float, getOpacity, setOpacity)
 
 class CountdownWindow(QWidget):
     MIN_MINUTES = 1
@@ -53,6 +35,8 @@ class CountdownWindow(QWidget):
         self.is_running = False
         self.dragging = False
         self.drag_offset = QPoint()
+        self._press_pos = None
+        self._moved = False
         self.blink_state = False
 
         # 定时器
@@ -86,7 +70,7 @@ class CountdownWindow(QWidget):
         self.time_edit.returnPressed.connect(self.apply_edit_minutes)
         self.time_edit.editingFinished.connect(self.apply_edit_minutes)
 
-        # 开始/暂停主按钮（始终可见）
+        # 开始/暂停主按钮（常显）
         self.start_button = QPushButton("▶")
         self.start_button.setCursor(QCursor(Qt.PointingHandCursor))
         self.start_button.setFixedSize(40, 40)
@@ -97,65 +81,27 @@ class CountdownWindow(QWidget):
         )
         self.start_button.clicked.connect(self.toggle_start_pause)
 
-        # 悬停控制区（重置、暂停、关闭）
-        self.hover_controls = FadeWidget()
-        self.hover_controls.setVisible(True)
-        hover_layout = QHBoxLayout(self.hover_controls)
-        hover_layout.setContentsMargins(0, 0, 0, 0)
-        hover_layout.setSpacing(8)
-
-        self.pause_button = QPushButton("⏸")
-        self.reset_button = QPushButton("⟲")
-        self.close_button = QPushButton("✕")
-        for b in (self.pause_button, self.reset_button, self.close_button):
-            b.setFixedSize(32, 32)
-            b.setCursor(QCursor(Qt.PointingHandCursor))
-            b.setStyleSheet(
-                "QPushButton{background:#ffffff; color:#111; border:none; border-radius:16px; font-size:14px;}"
-                "QPushButton:hover{background:#f0f0f0;}"
-                "QPushButton:pressed{background:#e6e6e6;}"
-            )
-        self.pause_button.clicked.connect(self.toggle_start_pause)
-        self.reset_button.clicked.connect(self.reset_timer)
-        self.close_button.clicked.connect(self.safe_close)
-
-        hover_layout.addWidget(self.pause_button)
-        hover_layout.addWidget(self.reset_button)
-        hover_layout.addWidget(self.close_button)
-
         # 顶部行：时间显示 + 开始按钮
         top_row = QHBoxLayout()
-        top_row.setContentsMargins(12, 12, 12, 6)
+        top_row.setContentsMargins(12, 12, 12, 12)
         top_row.setSpacing(8)
 
-        self.time_container = QWidget()
-        time_stack = QStackedLayoutCompat(self.time_container)
-        time_stack.addWidget(self.time_label)
-        time_stack.addWidget(self.time_edit)
-        self.time_stack = time_stack
+        # 简化：直接在布局中切换 label 与 edit 的可见性
+        time_box = QVBoxLayout()
+        time_box.setContentsMargins(0, 0, 0, 0)
+        time_box.setSpacing(0)
+        time_box.addWidget(self.time_label)
+        time_box.addWidget(self.time_edit)
+        self.time_edit.setVisible(False)
 
-        top_row.addWidget(self.time_container)
+        top_row.addLayout(time_box, 1)
         top_row.addWidget(self.start_button, 0, Qt.AlignVCenter)
 
-        # 底部行：悬停控制
-        bottom_row = QHBoxLayout()
-        bottom_row.setContentsMargins(12, 0, 12, 10)
-        bottom_row.addWidget(self.hover_controls, 0, Qt.AlignLeft)
-
-        # 根布局
+        # 根布局（删除了底部悬浮控制区）
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(0)
         root.addLayout(top_row)
-        root.addLayout(bottom_row)
-
-        # 初始：控制隐藏（透明）
-        self.set_hover_visible(False, instant=True)
-
-        # 交互：事件过滤用于 hover 显示
-        self.installEventFilter(self)
-        self.time_label.installEventFilter(self)
-        self.hover_controls.installEventFilter(self)
 
         # 快捷键
         QShortcut(QKeySequence(Qt.Key_Space), self, activated=self.toggle_start_pause)
@@ -166,76 +112,6 @@ class CountdownWindow(QWidget):
         self.adjustSize()
         screen = QGuiApplication.primaryScreen().availableGeometry()
         self.move(int(screen.width() * 0.7), int(screen.height() * 0.1))
-
-    # 事件过滤：控制 hover 可见性
-    def eventFilter(self, obj, event):
-        et = event.type()
-        if et in (QEvent.Enter, QEvent.HoverEnter):
-            self.set_hover_visible(True)
-        elif et in (QEvent.Leave, QEvent.HoverLeave):
-            if not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
-                self.set_hover_visible(False)
-        return super().eventFilter(obj, event)
-
-    # 拖动与点击编辑
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self.time_label.underMouse():
-            self._press_pos = event.globalPosition().toPoint()
-            self._moved = False
-            self.dragging = True
-            self.drag_offset = self._press_pos - self.frameGeometry().topLeft()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self.dragging and (event.buttons() & Qt.LeftButton):
-            now_pos = event.globalPosition().toPoint()
-            if (now_pos - self._press_pos).manhattanLength() > 3:
-                self._moved = True
-            self.move(now_pos - self.drag_offset)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.dragging:
-            was_moved = self._moved
-            self.dragging = False
-            event.accept()
-            if not was_moved and not self.is_running and self.time_label.underMouse():
-                self.enter_edit_mode()
-            return
-        super().mouseReleaseEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        if self.time_label.underMouse():
-            self.enter_edit_mode()
-            event.accept()
-        else:
-            super().mouseDoubleClickEvent(event)
-
-    def set_hover_visible(self, visible: bool, instant: bool = False):
-        target = 1.0 if visible else 0.0
-        if instant:
-            self.hover_controls.setVisible(True)
-            self.hover_controls.setOpacity(target)
-            if target == 0.0:
-                self.hover_controls.setVisible(False)
-            return
-        from PySide6.QtCore import QPropertyAnimation
-
-        self.hover_controls.setVisible(True)
-        anim = QPropertyAnimation(self.hover_controls, b"opacity", self)
-        anim.setDuration(180)
-        anim.setStartValue(self.hover_controls.getOpacity())
-        anim.setEndValue(target)
-        anim.setEasingCurve(QEasingCurve.InOutQuad)
-        def on_finished():
-            if target == 0.0:
-                self.hover_controls.setVisible(False)
-        anim.finished.connect(on_finished)
-        anim.start()
 
     # 计时逻辑
     def on_tick(self):
@@ -281,13 +157,11 @@ class CountdownWindow(QWidget):
         self.tick_timer.start()
         self.is_running = True
         self.start_button.setText("⏸")
-        self.pause_button.setText("⏸")
 
     def pause_timer(self):
         self.tick_timer.stop()
         self.is_running = False
         self.start_button.setText("▶")
-        self.pause_button.setText("▶")
 
     def reset_timer(self):
         self.pause_timer()
@@ -304,10 +178,12 @@ class CountdownWindow(QWidget):
         self.blink_timer.start()
         QTimer.singleShot(2200, self.blink_timer.stop)
 
+    # 进入编辑（仅当未运行）
     def enter_edit_mode(self):
         minutes = max(1, self.total_seconds // 60)
         self.time_edit.setText(str(minutes))
-        self.time_stack.setCurrentWidget(self.time_edit)
+        self.time_label.setVisible(False)
+        self.time_edit.setVisible(True)
         self.time_edit.setFocus()
         self.time_edit.selectAll()
 
@@ -323,31 +199,53 @@ class CountdownWindow(QWidget):
         self.blink_timer.stop()
         self.blink_state = False
         self.update_time_view()
-        self.time_stack.setCurrentWidget(self.time_label)
+        self.time_edit.setVisible(False)
+        self.time_label.setVisible(True)
 
     def safe_close(self):
         self.close()
 
-class QStackedLayoutCompat(QVBoxLayout):
-    """
-    轻量替代：用切换可见性模拟堆叠布局。
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setContentsMargins(0, 0, 0, 0)
-        self.setSpacing(0)
-        self._widgets = []
+    # 拖动逻辑：窗口任意区域左键按住可拖动（编辑框激活时不拖动）
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            # 如果正在编辑输入框且鼠标在输入框内，则不拦截拖动，交给输入框处理
+            if self.time_edit.isVisible() and self.time_edit.underMouse():
+                return super().mousePressEvent(event)
+            self._press_pos = event.globalPosition().toPoint()
+            self._moved = False
+            self.dragging = True
+            self.drag_offset = self._press_pos - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
-    def addWidget(self, w):
-        self._widgets.append(w)
-        self.addWidget_(w)
+    def mouseMoveEvent(self, event):
+        if self.dragging and (event.buttons() & Qt.LeftButton):
+            now_pos = event.globalPosition().toPoint()
+            if self._press_pos is not None and (now_pos - self._press_pos).manhattanLength() > 3:
+                self._moved = True
+            self.move(now_pos - self.drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
 
-    def addWidget_(self, w):
-        super().addWidget(w)
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.dragging:
+            was_moved = self._moved
+            self.dragging = False
+            event.accept()
+            # 未移动且在时间标签上，且未运行时，进入编辑
+            if not was_moved and not self.is_running and self.time_label.underMouse():
+                self.enter_edit_mode()
+            return
+        super().mouseReleaseEvent(event)
 
-    def setCurrentWidget(self, w):
-        for each in self._widgets:
-            each.setVisible(each is w)
+    def mouseDoubleClickEvent(self, event):
+        if self.time_label.underMouse() and not self.is_running:
+            self.enter_edit_mode()
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
 
 def main():
     app = QApplication(sys.argv)
