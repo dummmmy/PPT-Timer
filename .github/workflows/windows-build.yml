@@ -18,10 +18,11 @@ jobs:
       - name: Show repo files
         shell: pwsh
         run: |
-          pwd
+          Write-Host "PWD:" (Get-Location)
           git rev-parse --show-toplevel
-          ls -la
+          dir
           if (Test-Path main.py) { Write-Host "FOUND main.py" } else { Write-Error "MISSING main.py" }
+          if (Test-Path requirements.txt) { Get-Content requirements.txt } else { Write-Host "requirements.txt not found (will fallback)" }
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -47,7 +48,7 @@ jobs:
       - name: List dist
         shell: pwsh
         run: |
-          ls -la dist
+          if (Test-Path "dist") { dir dist } else { Write-Error "dist folder does not exist" }
           if (Test-Path "dist/PPTCountdown.exe") { Write-Host "EXE OK" } else { Write-Error "EXE NOT FOUND" }
 
       - name: Upload artifact
